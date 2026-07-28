@@ -1,9 +1,7 @@
 import sys
 import os
 
-# Add the project root ("Agent Mania") to the path so absolute imports work
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import gymnasium as gym
 import torch
@@ -50,7 +48,7 @@ def lr_update(lr, decay):
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
  
-    env = gym.make("CartPole-v1")
+    env = gym.make("LunarLander-v3")
     obs_dim = env.observation_space.shape[0]      # 4
     action_dim = env.action_space.n                # 2
  
@@ -64,8 +62,8 @@ def main():
     buffer = ERB(n=10000)
  
     trainer = DQN_trainer(
-        batch_size=64,
-        episode_num=200,
+        batch_size=32,
+        episode_num=800,
         max_steps=500,                 # CartPole-v1 caps episodes at 500 steps
         update_step_interval=100,      # hard-sync target net every 200 env steps
  

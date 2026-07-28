@@ -1,6 +1,7 @@
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import time
 import torch
@@ -27,7 +28,7 @@ def build_qnet(obs_dim: int, action_dim: int, hidden: int = 128) -> DQN:
 def main():
     device = "cpu"  # rendering + single-step inference — no need for GPU here
 
-    env = gym.make("CartPole-v1", render_mode="human")
+    env = gym.make("LunarLander-v3", render_mode="human")
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
 
