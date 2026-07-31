@@ -22,7 +22,7 @@ class DQN_trainer:
                  buffer:BaseBuffer, buffer_feature:str, action_dim:int,
                  epsilon:float, epsilon_min:float, epsilon_decay:float, epsilon_update:Callable,
                  policy_net:nn.Module, target_net:nn.Module, optim:optim.Optimizer, criterion:nn.modules.loss._Loss,
-                 device:str, env) -> None:
+                 device:str, dash_path:str, env) -> None:
 
         # --------------------------------
         self.episode_num=episode_num
@@ -57,6 +57,7 @@ class DQN_trainer:
         self.criterion=criterion
 
         self.device=device
+        self.dash_path=dash_path
         self.env=env
         # --------------------------------
         self.episode_losses=[]
@@ -154,7 +155,7 @@ class DQN_trainer:
             avg_reward = episode_reward / (step + 1)
             print(f"Episode {episode} => Average Step Loss: {avg_loss:.4f} | Episode Reward: {episode_reward} | Steps: {step + 1}")
 
-        self.plot_dashboard(save_path="dashboard.png")
+        self.plot_dashboard(save_path=self.dash_path)
 
     def soft_update_target_net(self):
         target_net_state_dict = self.target_net.state_dict()

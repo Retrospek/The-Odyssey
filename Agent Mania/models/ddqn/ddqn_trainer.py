@@ -1,6 +1,6 @@
 from models.buffer import BaseBuffer
 from models.experience import make_transition_class
-
+from models.dqn.dqn import DQN
 import numpy as np
 
 import torch
@@ -14,15 +14,15 @@ import matplotlib.gridspec as gridspec
 Transition = make_transition_class()  # build the namedtuple class once
 
 
-class DQN_trainer:
+class DDQN_trainer:
     def __init__(self, batch_size:int, episode_num:int, max_steps:int, update_step_interval:int,
                  tau:float, tau_decay:float, tau_update:Callable,
                  gamma:float, gamma_decay:float, gamma_update:Callable,
                  learning_rate:float, learning_rate_decay:float, learning_rate_update:Callable,
                  buffer:BaseBuffer, buffer_feature:str, action_dim:int,
                  epsilon:float, epsilon_min:float, epsilon_decay:float, epsilon_update:Callable,
-                 policy_net:nn.Module, target_net:nn.Module, optim:optim.Optimizer, criterion:nn.modules.loss._Loss,
-                 device:str, env) -> None:
+                 action_net:nn.Module, q_net:nn.Module, optim:optim.Optimizer, criterion:nn.modules.loss._Loss,
+                 device:str, dash_path:str, env) -> None:
 
         # --------------------------------
         self.episode_num=episode_num
@@ -51,12 +51,13 @@ class DQN_trainer:
         self.epsilon_decay=epsilon_decay
         self.epsilon_update=epsilon_update
 
-        self.policy_net=policy_net
-        self.target_net=target_net
+        self.action_net=action_net
+        self.q_net=q_net
         self.optim=optim
         self.criterion=criterion
 
         self.device=device
+        self.dash_path=dash_path
         self.env=env
         # --------------------------------
         self.episode_losses=[]
@@ -76,7 +77,7 @@ class DQN_trainer:
             if rand_val <= self.epsilon:
                 action = torch.randint(0, self.action_dim, (1,)).item()  
             else:
-                action = torch.argmax(self.policy_net(state_t), dim=1).item()  
+                action = torch.argmax(self.action_net(state_t), dim=1).item()  
 
         return action
 
@@ -92,10 +93,11 @@ class DQN_trainer:
         rewards = torch.tensor([item.reward for item in experience_samples], dtype=torch.float32, device=self.device).unsqueeze(1)  
         dones = torch.tensor([item.done for item in experience_samples], dtype=torch.float32, device=self.device).unsqueeze(1)  
 
-        curr_qs = self.policy_net(states).gather(1, actions)  
+        curr_qs = self.action_net(states).gather(1, actions)  
         with torch.no_grad():
-            next_max_qs = torch.max(self.target_net(next_state), dim=1).values.unsqueeze(1)  
-            target_qs = rewards + self.gamma * next_max_qs * (1 - dones)
+            next_actions = torch.argmax(self.action_net(next_state), dim=1, keepdim=True)
+            next_qs = self.q_net(next_state).gather(1, next_actions)
+            target_qs = rewards + self.gamma * next_qs * (1 - dones)
 
         loss = self.criterion(curr_qs, target_qs)
         self.optim.zero_grad()
@@ -154,14 +156,14 @@ class DQN_trainer:
             avg_reward = episode_reward / (step + 1)
             print(f"Episode {episode} => Average Step Loss: {avg_loss:.4f} | Episode Reward: {episode_reward} | Steps: {step + 1}")
 
-        self.plot_dashboard(save_path="dashboard.png")
+        self.plot_dashboard(save_path=self.dash_path)
 
     def soft_update_target_net(self):
-        target_net_state_dict = self.target_net.state_dict()
-        policy_net_state_dict = self.policy_net.state_dict()
-        for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key]*self.tau + target_net_state_dict[key]*(1-self.tau)
-        self.target_net.load_state_dict(target_net_state_dict)
+        action_net_state_dict = self.action_net.state_dict()
+        q_net_state_dict = self.q_net.state_dict()
+        for key in action_net_state_dict:
+            q_net_state_dict[key] = action_net_state_dict[key]*self.tau + q_net_state_dict[key]*(1-self.tau)
+        self.q_net.load_state_dict(action_net_state_dict)
 
     def plot_dashboard(self, save_path: str = None, show: bool = True, ma_window: int = 20):
         """
@@ -210,7 +212,7 @@ class DQN_trainer:
  
         fig = plt.figure(figsize=(16, 10))
         gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.3)
-        fig.suptitle("DQN Training Dashboard", fontsize=20, fontweight='bold', color='#2c3e50', y=0.98)
+        fig.suptitle("DDQN Training Dashboard", fontsize=20, fontweight='bold', color='#2c3e50', y=0.98)
  
         def style_axis(ax):
             ax.spines['top'].set_visible(False)

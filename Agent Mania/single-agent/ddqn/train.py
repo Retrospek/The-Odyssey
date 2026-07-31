@@ -10,7 +10,7 @@ import torch.optim as optim
  
 from models.model import BaseModel
 from models.buffer import ERB
-from models.dqn.dqn_trainer import DQN_trainer
+from models.ddqn.ddqn_trainer import DDQN_trainer
 from models.dqn.dqn import DQN
  
 # ----------------------------------------------------------------------
@@ -47,22 +47,20 @@ def lr_update(lr, decay):
  
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
     env_name="LunarLander-v3"
     env = gym.make(env_name)
     obs_dim = env.observation_space.shape[0]      # 4
     action_dim = env.action_space.n                # 2
  
-    policy_net = build_qnet(obs_dim, action_dim).to(device)
-    target_net = build_qnet(obs_dim, action_dim).to(device)
-    target_net.load_state_dict(policy_net.state_dict())
+    action_net = build_qnet(obs_dim, action_dim).to(device)
+    q_net = build_qnet(obs_dim, action_dim).to(device)
  
-    optimizer = optim.Adam(policy_net.parameters(), lr=1e-3)
+    optimizer = optim.Adam(action_net.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
  
     buffer = ERB(n=10000)
  
-    trainer = DQN_trainer(
+    trainer = DDQN_trainer(
         batch_size=32,
         episode_num=300,
         max_steps=500,                 
@@ -89,13 +87,13 @@ def main():
         epsilon_decay=0.995 / 100,     
         epsilon_update=linear_epsilon_update,
  
-        policy_net=policy_net,
-        target_net=target_net,
+        action_net=action_net,
+        q_net=q_net,
         optim=optimizer,
         criterion=criterion,
  
         device=device,
-        dash_path=rf"Agent Mania\single-agent\dqn\{env_name}_dqn_training_dash",
+        dash_path=rf"Agent Mania\single-agent\ddqn\{env_name}_ddqn_training_dash",
         env=env,
     )
  
@@ -111,8 +109,8 @@ def main():
     print(f"Avg reward (last 100 episodes): {avg_last_100:.1f}")
     print(f"Solved (>=475 avg over last 100)? {'YES' if avg_last_100 >= 475 else 'no'}")
  
-    policy_net.save_checkpoint("checkpoints/cartpole_dqn.pt")
-    print("Saved checkpoint to checkpoints/cartpole_dqn.pt")
+    action_net.save_checkpoint("checkpoints/cartpole_ddqn.pt")
+    print("Saved checkpoint to checkpoints/cartpole_ddqn.pt")
  
     env.close()
  
