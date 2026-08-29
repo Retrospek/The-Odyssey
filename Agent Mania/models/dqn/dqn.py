@@ -1,9 +1,8 @@
-from models.model import BaseModel
-import torch
+from models.value_model import ValueBaseModel
 import torch.nn as nn
 
-class DQN(BaseModel):
-    def __init__(self, network:nn.Module, tau):
+class DQN(ValueBaseModel):
+    def __init__(self, network:nn.Module):
         super().__init__()
 
         self.q_head = network

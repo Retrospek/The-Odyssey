@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
  
-from models.model import BaseModel
+from models.value_model import ValueBaseModel
 from models.buffer import ERB
 from models.ddqn.ddqn_trainer import DDQN_trainer
 from models.dqn.dqn import DQN

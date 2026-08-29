@@ -2,7 +2,7 @@ import os
 import torch
 import torch.nn as nn
 
-class BaseModel(nn.Module):
+class ValueBaseModel(nn.Module):
 
   def __init__(self, **kwargs) -> None:
     super().__init__()
