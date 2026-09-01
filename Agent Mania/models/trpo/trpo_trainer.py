@@ -171,81 +171,30 @@ class TRPO_trainer:
     # 3. Surrogate objective
     # -----------------------------------------------------------------
     def surrogate_loss(self, states, actions, old_log_probs, advantages):
-        """
-        ratio = exp(log_pi_theta(a|s) - old_log_prob(a|s))
-        L(theta) = mean(ratio * advantages)
-
-        This is something to MAXIMIZE. Don't negate it in here — if a
-        caller needs a "loss" to minimize, that's their choice to make,
-        not this function's job.
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
     # 4. Mean KL divergence between old and current policy
     # -----------------------------------------------------------------
     def mean_kl(self, states):
-        """
-        KL(pi_old || pi_theta), averaged over the batch of states.
-
-        Compute the current distribution, and a DETACHED copy of it to
-        stand in as "old" — at the point you call this (theta == theta_old)
-        the value is 0 and the first derivative is 0, but the SECOND
-        derivative (what fisher_vector_product needs) is not, because the
-        graph is still differentiable w.r.t. the live (non-detached) copy.
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
     # 5. Fisher-vector product — never forms the full Fisher matrix
     # -----------------------------------------------------------------
     def fisher_vector_product(self, states, vector):
-        """
-        Given a flat vector v (same length as flattened policy params),
-        compute F @ v via double backprop through mean_kl:
-
-            grad_kl   = grad(mean_kl(states), params, create_graph=True)  # flat
-            grad_kl_v = sum(grad_kl * v)
-            Fv        = grad(grad_kl_v, params)                          # flat
-            Fv        = Fv + damping_coeff * v                           # stabilizer
-
-        This is the trick that makes CG possible at neural-net scale.
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
     # 6. Conjugate gradient solve: F x = g
     # -----------------------------------------------------------------
     def conjugate_gradient(self, states, g):
-        """
-        Solve F x = g for x using only fisher_vector_product — F is never
-        formed explicitly. Standard CG loop, up to self.cg_iters
-        iterations, early-stop when residual norm < self.cg_residual_tol.
-
-        Returns: x — the natural gradient search DIRECTION (not yet
-        scaled to fit the trust region).
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
     # 7. Step size + backtracking line search
     # -----------------------------------------------------------------
     def line_search(self, states, actions, old_log_probs, advantages, x):
-        """
-        Full natural-gradient step (before backtracking):
-            full_step = sqrt(2 * max_kl / (x^T F x)) * x
-
-        Then try full_step, full_step * backtrack_coeff,
-        full_step * backtrack_coeff**2, ... up to backtrack_iters times.
-        For each candidate:
-            1. Temporarily apply it to the policy params.
-            2. Recompute surrogate_loss and mean_kl at the new params.
-            3. Accept if surrogate improved AND kl <= max_kl.
-            4. Otherwise restore old params, shrink further, retry.
-
-        Returns: the accepted flat parameter delta (zeros if every
-        candidate failed both checks).
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
@@ -253,17 +202,6 @@ class TRPO_trainer:
     #    anywhere in this method — the update is applied manually.
     # -----------------------------------------------------------------
     def update_policy(self, states, actions, old_log_probs, advantages):
-        """
-        1. g = flat gradient of surrogate_loss w.r.t. policy params
-        2. x = conjugate_gradient(states, g)
-        3. delta = line_search(states, actions, old_log_probs, advantages, x)
-        4. Add delta directly into the policy parameters
-           (torch.nn.utils.vector_to_parameters, or your own flatten /
-           unflatten helpers).
-
-        Log realized KL and surrogate value into self.kl_history /
-        self.policy_loss_history.
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
@@ -271,29 +209,12 @@ class TRPO_trainer:
     #    This is the one place a normal optimizer.step() belongs.
     # -----------------------------------------------------------------
     def update_value(self, states, returns):
-        """
-        Plain Adam (self.value_optim), MSE(V(s), returns),
-        self.value_train_iters passes over the batch. Fully decoupled
-        from update_policy.
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
     # 10. Main loop
     # -----------------------------------------------------------------
     def train_step(self):
-        """
-        for each iteration:
-            rollout = self.collect_rollout()
-            advantages, returns = self.compute_gae(
-                rollout['rewards'], rollout['values'], rollout['dones'], last_value
-            )
-            self.update_policy(rollout['states'], rollout['actions'],
-                                rollout['old_log_probs'], advantages)
-            self.update_value(rollout['states'], returns)
-            # log episode_rewards / episode_steps / gamma_history here
-        self.plot_dashboard(save_path=self.dash_path)
-        """
         raise NotImplementedError
 
     # -----------------------------------------------------------------
