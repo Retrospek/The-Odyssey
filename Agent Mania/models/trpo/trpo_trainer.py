@@ -151,7 +151,7 @@ class TRPO_trainer:
                 next_advantage = advantages[t + 1]
 
             delta = r_t + self.gamma * v_tpo * (1 - d_t) - v_t
-            advantage = delta + self.gamma * self.gae_lambda * (1 - d_t) * next_advantage
+            advantage = delta + self.   gamma * self.gae_lambda * (1 - d_t) * next_advantage
             advantages[t] = advantage
 
         advantages=torch.tensor(advantages, dtype=torch.float32)
@@ -163,21 +163,36 @@ class TRPO_trainer:
             "advantages": advantages,
             "returns": returns
         }
-            
-
-
 
     # -----------------------------------------------------------------
     # 3. Surrogate objective
     # -----------------------------------------------------------------
     def surrogate_loss(self, states, actions, old_log_probs, advantages):
-        raise NotImplementedError
+        logits = self.actor_critic(states)
+        log_action_probs = logits["log_action_probs"]  # (batch_size, action_dim)
+
+        selected_log_probs = log_action_probs.gather(1, actions.unsqueeze(1)).squeeze(1)  # (batch_size,)
+
+        ratios = torch.exp(selected_log_probs - old_log_probs)
+        return torch.mean(ratios * advantages)
 
     # -----------------------------------------------------------------
     # 4. Mean KL divergence between old and current policy
     # -----------------------------------------------------------------
     def mean_kl(self, states):
-        raise NotImplementedError
+        logits=self.actor_critic(states)    
+        log_probs=logits["log_action_probs"]
+
+        old_log_probs=log_probs.detach() # log(P(a)) remember we don't want this to be 
+        new_log_probs=log_probs # log(Q(a))
+
+        probs=logits["action_probs"]
+        old_probs=probs.detach()
+        new_probs=probs
+
+        per_state_kl = torch.sum(old_probs * (old_log_probs - new_log_probs), dim=1)
+        mean_kl = torch.mean(per_state_kl)
+        return mean_kl
 
     # -----------------------------------------------------------------
     # 5. Fisher-vector product — never forms the full Fisher matrix
