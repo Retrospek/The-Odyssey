@@ -65,7 +65,7 @@ class TRPO_trainer:
         self.gamma_history = []
 
     # -----------------------------------------------------------------
-    # Forward pass helper (kept from your original)
+    # Forward pass helper
     # -----------------------------------------------------------------
     def output_stateval_and_probs(self, state):
         state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -151,7 +151,7 @@ class TRPO_trainer:
                 next_advantage = advantages[t + 1]
 
             delta = r_t + self.gamma * v_tpo * (1 - d_t) - v_t
-            advantage = delta + self.   gamma * self.gae_lambda * (1 - d_t) * next_advantage
+            advantage = delta + self.gamma * self.gae_lambda * (1 - d_t) * next_advantage
             advantages[t] = advantage
 
         advantages=torch.tensor(advantages, dtype=torch.float32)
@@ -198,7 +198,17 @@ class TRPO_trainer:
     # 5. Fisher-vector product — never forms the full Fisher matrix
     # -----------------------------------------------------------------
     def fisher_vector_product(self, states, vector):
-        raise NotImplementedError
+
+        # grab mean_kl 2nd deriv. = Fisher Information Matrix
+        mean_kl = self.mean_kl(states)
+        params = list(self.actor_critic.parameters())
+        grad_kl = torch.autograd.grad(mean_kl, params, create_graph=True)
+        flat_grad_kl = torch.cat([torch.flatten(g) for g in grad_kl])
+        one_grad_vector_dot = torch.dot(flat_grad_kl, vector)
+        second_grad_Fv = torch.autograd.grad(one_grad_vector_dot, params, create_graph=False)
+        flat_sgrad_Fv = torch.cat([torch.flatten(g) for g in second_grad_Fv])
+
+        return flat_sgrad_Fv + self.damping_coeff * vector
 
     # -----------------------------------------------------------------
     # 6. Conjugate gradient solve: F x = g
