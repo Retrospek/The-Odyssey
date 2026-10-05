@@ -28,6 +28,16 @@ class TRPO_trainer:
         self.episode_num = episode_num
         self.max_steps = max_steps
 
+        self.buffer = buffer
+        self.buffer_feature = buffer_feature
+        self.action_dim = action_dim
+        self.state_dim = state_dim
+
+        self.actor_critic = actor_critic
+        self.device = device
+        self.dash_path = dash_path
+        self.env = env
+
         self.gamma = gamma
         self.gamma_decay = gamma_decay
         self.gamma_update = gamma_update
@@ -45,16 +55,6 @@ class TRPO_trainer:
         # Adjust this to however your actor_critic exposes the value head's
         # parameters (e.g. self.actor_crsitic.value_net.parameters()).
         self.value_optim = torch.optim.Adam(self.actor_critic.parameters(), lr=value_lr)
-
-        self.buffer = buffer
-        self.buffer_feature = buffer_feature
-        self.action_dim = action_dim
-        self.state_dim = state_dim
-
-        self.actor_critic = actor_critic
-        self.device = device
-        self.dash_path = dash_path
-        self.env = env
 
         # ---- logging ----
         self.episode_rewards = []
@@ -214,7 +214,49 @@ class TRPO_trainer:
     # 6. Conjugate gradient solve: F x = g
     # -----------------------------------------------------------------
     def conjugate_gradient(self, states, g):
-        raise NotImplementedError
+        """
+        Purpose:
+            TRPO needs the natural-gradient direction ``x = F^-1 g``, where
+            ``F`` is the (damped) Fisher-information matrix and ``g`` is the
+            flattened policy-gradient vector.  Forming or inverting ``F`` is
+            impractical for a neural-network policy, so conjugate gradient
+            uses only Fisher-vector products to iteratively approximate ``x``.
+
+        Variables:
+            states: Rollout observations used by ``fisher_vector_product`` to
+                evaluate the local Fisher matrix.
+            g: Right-hand side of the system; the flattened policy gradient.
+            x: Current estimate of the natural-gradient direction.  It starts
+                at zero because no direction has been estimated initially.
+            r: Residual ``g - F x``.  It measures how far the current estimate
+                is from solving the linear system.
+            p: Conjugate search direction.  It starts as the residual and is
+                updated to avoid revisiting directions already searched.
+            r_dot_r: Squared residual norm, used to compute the step size and
+                to decide when the approximation is sufficiently accurate.
+        """
+        x = torch.zeros_like(g)
+        r = g.clone()
+        p = r.clone()
+        r_dot_r = torch.dot(r, r)
+
+        for _ in range(self.cg_iters):
+            
+            fisher_p = self.fisher_vector_product(states, p)
+
+            step_size = r_dot_r / (torch.dot(p, fisher_p) + 1e-8)
+            x = x + step_size * p
+
+            r = r - step_size * fisher_p
+            new_r_dot_r = torch.dot(r, r)
+            if new_r_dot_r < self.cg_residual_tol:
+                break
+
+            beta = new_r_dot_r / (r_dot_r + 1e-8)
+            p = r + beta * p
+            r_dot_r = new_r_dot_r
+
+        return x
 
     # -----------------------------------------------------------------
     # 7. Step size + backtracking line search
