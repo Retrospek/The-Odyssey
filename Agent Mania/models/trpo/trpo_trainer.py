@@ -262,26 +262,65 @@ class TRPO_trainer:
     # 7. Step size + backtracking line search
     # -----------------------------------------------------------------
     def line_search(self, states, actions, old_log_probs, advantages, x):
-        params = list(self.actor_critic.parameters())
-        old_theta = torch.nn.utils.parameters_to_vector(params).detach().clone()
+        params = [p for p in self.actor_critic.parameters() if p.requires_grad]
+
+        old_params = torch.cat([
+            p.detach().reshape(-1).clone()
+            for p in params
+        ])
+
+        x = x.detach().to(
+            device=old_params.device,
+            dtype=old_params.dtype
+        ).reshape(-1)
 
         with torch.no_grad():
-            old_L = self.surrogate_loss(states, actions, old_log_probs, advantages)
+            old_objective = self.surrogate_loss(states, actions, old_log_probs, advantages).item()
             old_probs = self.actor_critic(states)["action_probs"].detach()
 
-        for i in range(self.backtrack_iters):
-            alpha = self.backtrack_coeff ** i
-            torch.nn.utils.vector_to_parameters(old_theta + alpha * x, params)
-
+        def set_params(flat_params):
+            offset = 0
             with torch.no_grad():
-                new_L = self.surrogate_loss(states, actions, old_log_probs, advantages)
-                new_probs = self.actor_critic(states)["action_probs"]
-                mean_kl = torch.sum(old_probs * (old_probs.log() - new_probs.log()), dim=-1).mean()
+                for p in params:
+                    size = p.numel()
+                    p.copy_(flat_params[offset:offset + size].view_as(p))
+                    offset += size
 
-            if new_L > old_L and mean_kl <= self.max_kl:
-                return True
+        try:
+            for i in range(self.backtrack_iters):
+                step_fraction = self.backtrack_coeff ** i
 
-        torch.nn.utils.vector_to_parameters(old_theta, params)
+                # Candidate: theta_new = theta_old + alpha * x
+                set_params(old_params + step_fraction * x)
+
+                with torch.no_grad():
+                    new_objective = self.surrogate_loss(
+                        states, actions, old_log_probs, advantages
+                    ).item()
+
+                    new_probs = self.actor_critic(states)["action_probs"]
+
+                    kl = torch.sum(
+                        old_probs * (
+                            torch.log(old_probs + 1e-8)
+                            - torch.log(new_probs + 1e-8)
+                        ),
+                        dim=-1
+                    ).mean().item()
+
+                if (
+                    np.isfinite(new_objective)
+                    and np.isfinite(kl)
+                    and new_objective > old_objective
+                    and kl <= self.max_kl
+                ):
+                    return True
+
+        except Exception:
+            set_params(old_params)
+            raise
+
+        set_params(old_params)
         return False
 
     # -----------------------------------------------------------------
