@@ -262,7 +262,27 @@ class TRPO_trainer:
     # 7. Step size + backtracking line search
     # -----------------------------------------------------------------
     def line_search(self, states, actions, old_log_probs, advantages, x):
-        raise NotImplementedError
+        params = list(self.actor_critic.parameters())
+        old_theta = torch.nn.utils.parameters_to_vector(params).detach().clone()
+
+        with torch.no_grad():
+            old_L = self.surrogate_loss(states, actions, old_log_probs, advantages)
+            old_probs = self.actor_critic(states)["action_probs"].detach()
+
+        for i in range(self.backtrack_iters):
+            alpha = self.backtrack_coeff ** i
+            torch.nn.utils.vector_to_parameters(old_theta + alpha * x, params)
+
+            with torch.no_grad():
+                new_L = self.surrogate_loss(states, actions, old_log_probs, advantages)
+                new_probs = self.actor_critic(states)["action_probs"]
+                mean_kl = torch.sum(old_probs * (old_probs.log() - new_probs.log()), dim=-1).mean()
+
+            if new_L > old_L and mean_kl <= self.max_kl:
+                return True
+
+        torch.nn.utils.vector_to_parameters(old_theta, params)
+        return False
 
     # -----------------------------------------------------------------
     # 8. Policy update — ties 3 through 7 together. No optimizer.step()
