@@ -71,6 +71,31 @@ class TRPO_trainer:
         state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         return self.actor_critic(state_t)
 
+    def _policy_parameters(self):
+        """Return the parameters that affect the policy distribution.
+
+        The value head is deliberately excluded: it has no effect on the
+        categorical policy, so including it makes policy-gradient and
+        Fisher-vector-product calculations contain unused parameters.
+        """
+        policy_modules = []
+        for name in ("trunk_net", "policy_net"):
+            module = getattr(self.actor_critic, name, None)
+            if module is not None:
+                policy_modules.append(module)
+
+        if not policy_modules:
+            return [p for p in self.actor_critic.parameters() if p.requires_grad]
+
+        params = []
+        seen = set()
+        for module in policy_modules:
+            for param in module.parameters():
+                if param.requires_grad and id(param) not in seen:
+                    params.append(param)
+                    seen.add(id(param))
+        return params
+
     # -----------------------------------------------------------------
     # 1. Rollout collection — replaces off-policy buffer sampling
     # -----------------------------------------------------------------
@@ -92,7 +117,7 @@ class TRPO_trainer:
             action = dist.sample()
             log_prob = log_action_probs[action]
 
-            next_state, reward, terminated, truncated, _ = self.env.step(action)
+            next_state, reward, terminated, truncated, _ = self.env.step(action.item())
             done = terminated or truncated
 
             states.append(state)
@@ -171,6 +196,9 @@ class TRPO_trainer:
         logits = self.actor_critic(states)
         log_action_probs = logits["log_action_probs"]  # (batch_size, action_dim)
 
+        if log_action_probs.dim() == 1:
+            log_action_probs = log_action_probs.unsqueeze(0)
+
         selected_log_probs = log_action_probs.gather(1, actions.unsqueeze(1)).squeeze(1)  # (batch_size,)
 
         ratios = torch.exp(selected_log_probs - old_log_probs)
@@ -201,7 +229,7 @@ class TRPO_trainer:
 
         # grab mean_kl 2nd deriv. = Fisher Information Matrix
         mean_kl = self.mean_kl(states)
-        params = list(self.actor_critic.parameters())
+        params = self._policy_parameters()
         grad_kl = torch.autograd.grad(mean_kl, params, create_graph=True)
         flat_grad_kl = torch.cat([torch.flatten(g) for g in grad_kl])
         one_grad_vector_dot = torch.dot(flat_grad_kl, vector)
@@ -262,7 +290,7 @@ class TRPO_trainer:
     # 7. Step size + backtracking line search
     # -----------------------------------------------------------------
     def line_search(self, states, actions, old_log_probs, advantages, x):
-        params = [p for p in self.actor_critic.parameters() if p.requires_grad]
+        params = self._policy_parameters()
 
         old_params = torch.cat([
             p.detach().reshape(-1).clone()
@@ -328,20 +356,119 @@ class TRPO_trainer:
     #    anywhere in this method — the update is applied manually.
     # -----------------------------------------------------------------
     def update_policy(self, states, actions, old_log_probs, advantages):
-        raise NotImplementedError
+        states = states.to(self.device)
+        actions = actions.to(self.device, dtype=torch.long).reshape(-1)
+        old_log_probs = old_log_probs.detach().to(self.device).reshape(-1)
+        advantages = advantages.detach().to(self.device).reshape(-1)
+
+        policy_params = self._policy_parameters()
+        if not policy_params:
+            raise ValueError("The actor-critic has no trainable policy parameters.")
+
+        objective = self.surrogate_loss(states, actions, old_log_probs, advantages)
+        policy_grads = torch.autograd.grad(objective, policy_params)
+        flat_grad = torch.cat([grad.reshape(-1) for grad in policy_grads]).detach()
+
+        if not torch.isfinite(flat_grad).all():
+            raise RuntimeError("Non-finite policy gradient encountered during TRPO update.")
+
+        with torch.no_grad():
+            old_probs = self.actor_critic(states)["action_probs"].detach()
+
+        # A zero gradient already satisfies the local constrained optimum.
+        if torch.linalg.vector_norm(flat_grad) <= 1e-12:
+            self.policy_loss_history.append(objective.item())
+            self.kl_history.append(0.0)
+            return False
+
+        natural_direction = self.conjugate_gradient(states, flat_grad)
+        fisher_direction = self.fisher_vector_product(states, natural_direction)
+        curvature = 0.5 * torch.dot(natural_direction, fisher_direction)
+
+        if not torch.isfinite(curvature) or curvature <= 0:
+            raise RuntimeError("Invalid Fisher curvature encountered during TRPO update.")
+
+        # Scale the natural-gradient direction to the boundary of the KL ball:
+        # 0.5 * step^T F step <= max_kl.
+        step_scale = torch.sqrt(
+            torch.as_tensor(self.max_kl, device=curvature.device, dtype=curvature.dtype)
+            / (curvature + 1e-8)
+        )
+        full_step = natural_direction * step_scale
+        accepted = self.line_search(states, actions, old_log_probs, advantages, full_step)
+
+        with torch.no_grad():
+            new_output = self.actor_critic(states)
+            new_objective = self.surrogate_loss(
+                states, actions, old_log_probs, advantages
+            ).item()
+            new_probs = new_output["action_probs"]
+            realized_kl = torch.sum(
+                old_probs * (
+                    torch.log(old_probs + 1e-8) - torch.log(new_probs + 1e-8)
+                ),
+                dim=-1,
+            ).mean().item()
+
+        self.policy_loss_history.append(new_objective)
+        self.kl_history.append(realized_kl)
+        return accepted
 
     # -----------------------------------------------------------------
     # 9. Value function update — ordinary supervised regression.
     #    This is the one place a normal optimizer.step() belongs.
     # -----------------------------------------------------------------
     def update_value(self, states, returns):
-        raise NotImplementedError
+        states = states.to(self.device)
+        returns = returns.detach().to(self.device, dtype=torch.float32).reshape(-1)
+
+        if self.value_train_iters < 1:
+            raise ValueError("value_train_iters must be at least 1.")
+
+        losses = []
+        for _ in range(self.value_train_iters):
+            predicted_values = self.actor_critic(states)["state_value"].reshape(-1)
+            if predicted_values.numel() != returns.numel():
+                raise ValueError(
+                    "Value predictions and returns must contain the same number of elements."
+                )
+
+            value_loss = nn.functional.mse_loss(predicted_values, returns)
+            self.value_optim.zero_grad()
+            value_loss.backward()
+            self.value_optim.step()
+            losses.append(value_loss.item())
+
+        mean_value_loss = float(np.mean(losses))
+        self.value_loss_history.append(mean_value_loss)
+        return mean_value_loss
 
     # -----------------------------------------------------------------
     # 10. Main loop
     # -----------------------------------------------------------------
     def train_step(self):
-        raise NotImplementedError
+        for _ in range(self.episode_num):
+            rollout = self.collect_rollout()
+            gae = self.compute_gae(
+                rollout["rewards"],
+                rollout["values"],
+                rollout["dones"],
+                rollout["last_value"],
+            )
+
+            self.update_policy(
+                rollout["states"],
+                rollout["actions"],
+                rollout["old_log_probs"],
+                gae["advantages"],
+            )
+            self.update_value(rollout["states"], gae["returns"])
+            self.gamma = self.gamma_update(self.gamma, self.gamma_decay)
+
+        # A rollout can end mid-episode, in which case no episode-level
+        # metric exists yet and the dashboard has nothing valid to plot.
+        if self.episode_rewards:
+            self.plot_dashboard(save_path=self.dash_path)
 
     # -----------------------------------------------------------------
     # Dashboard — kept and relabeled for TRPO. Epsilon/tau panels
