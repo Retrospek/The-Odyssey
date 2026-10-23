@@ -72,7 +72,7 @@ This is an educational and exploratory repository, not a production framework or
 
 ## Credits
 
-This project makes use of AI-assisted exploration and tooling to help clarify ideas, visualize design patterns, and deepen understanding across the broader learning stack. The work is meant to support experimentation, understanding, and continuous growth.
+This project makes use of AI-assisted debating so that I can continuously learn, and assist me in understanding the conceptual/theoretical underpinnings of languages/semantics/math/etc.
 
 ## License
 
